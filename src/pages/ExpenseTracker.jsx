@@ -4,7 +4,6 @@ import { Receipt, Plus, Trash2, Save, Search, ChevronDown, ChevronUp } from 'luc
 
 const CATEGORIES = ['Kumaş', 'Garni', 'Dikim', 'Baskı', 'Nakış', 'Yıkama', 'İlik-Düğme', 'Ütü-Ambalaj', 'Etiket', 'Aksesuar', 'Nakliye', 'Diğer'];
 
-// ✅ Binlik ayraçlı TL formatı
 const fmtTRY = (v) => {
   if (!v && v !== 0) return '';
   const num = Number(String(v).replace(/\./g, '').replace(',', '.'));
@@ -12,7 +11,6 @@ const fmtTRY = (v) => {
   return num.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
-// Input değerinden sayıya çevir (1.234,56 → 1234.56)
 const parseTRY = (v) => {
   const cleaned = String(v).replace(/\./g, '').replace(',', '.');
   return isNaN(Number(cleaned)) ? 0 : Number(cleaned);
@@ -25,23 +23,25 @@ const emptyItem = () => ({ id: Date.now() + Math.random(), category: 'Kumaş', d
 
 const emptyForm = () => ({
   salesOrderId: '',
-  model: '', article: '',
-  invoiceNo: '', invoiceDate: new Date().toISOString().split('T')[0],
-  supplier: '', notes: '',
+  expenseType: 'article', // 'article' | 'shared'
+  articleId: '', // quotationId
+  invoiceNo: '',
+  invoiceDate: new Date().toISOString().split('T')[0],
+  supplier: '',
+  notes: '',
   items: [emptyItem()],
 });
 
 export default function ExpenseTracker() {
-  const [form, setForm]           = useState(emptyForm());
-  const [saving, setSaving]       = useState(false);
-  const [saveMsg, setSaveMsg]     = useState('');
-  const [activeId, setActiveId]   = useState(null);
-  const [list, setList]           = useState([]);
-  const [loading, setLoading]     = useState(true);
-  const [search, setSearch]       = useState('');
+  const [form, setForm]             = useState(emptyForm());
+  const [saving, setSaving]         = useState(false);
+  const [saveMsg, setSaveMsg]       = useState('');
+  const [activeId, setActiveId]     = useState(null);
+  const [list, setList]             = useState([]);
+  const [loading, setLoading]       = useState(true);
+  const [search, setSearch]         = useState('');
   const [expandedId, setExpandedId] = useState(null);
   const [salesOrders, setSalesOrders] = useState([]);
-  // TL input display değerleri
   const [amountDisplays, setAmountDisplays] = useState({});
 
   const load = async () => {
@@ -53,26 +53,26 @@ export default function ExpenseTracker() {
 
   useEffect(() => {
     load();
-    // Sales orders yükle
     supabase.from('sales_orders').select('id, customer, season, items, order_date')
       .order('created_at', { ascending: false })
       .then(({ data }) => setSalesOrders(data || []));
   }, []);
 
-  // Sales order seçilince model ve artikel doldur
+  // Seçili siparişin artikelleri
+  const selectedOrder = useMemo(() =>
+    salesOrders.find(o => o.id === form.salesOrderId), [form.salesOrderId, salesOrders]);
+
+  const orderArticles = useMemo(() =>
+    selectedOrder?.items || [], [selectedOrder]);
+
+  // Sipariş seçilince ilk artikeli otomatik seç
   const handleOrderSelect = (orderId) => {
     const order = salesOrders.find(o => o.id === orderId);
-    if (!order) {
-      setForm(f => ({ ...f, salesOrderId: '', model: '', article: '' }));
-      return;
-    }
-    // İlk artikeli al (birden fazla varsa kullanıcı değiştirebilir)
-    const firstItem = order.items?.[0];
+    const firstArticle = order?.items?.[0];
     setForm(f => ({
       ...f,
       salesOrderId: orderId,
-      model:   firstItem?.model   || '',
-      article: firstItem?.article || '',
+      articleId: firstArticle?.quotationId || '',
     }));
   };
 
@@ -80,32 +80,30 @@ export default function ExpenseTracker() {
     if (!search.trim()) return list;
     const q = search.toLocaleLowerCase('tr-TR');
     return list.filter(e =>
-      (e.model      || '').toLocaleLowerCase('tr-TR').includes(q) ||
-      (e.article    || '').toLocaleLowerCase('tr-TR').includes(q) ||
-      (e.supplier   || '').toLocaleLowerCase('tr-TR').includes(q) ||
-      (e.invoice_no || '').toLocaleLowerCase('tr-TR').includes(q)
+      (e.supplier    || '').toLocaleLowerCase('tr-TR').includes(q) ||
+      (e.invoice_no  || '').toLocaleLowerCase('tr-TR').includes(q) ||
+      (e.expense_type|| '').toLocaleLowerCase('tr-TR').includes(q)
     );
   }, [list, search]);
 
   const setField = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const setItem  = (id, k, v) => setForm(f => ({ ...f, items: f.items.map(i => i.id === id ? { ...i, [k]: v } : i) }));
-  const addItem    = () => {
+
+  const addItem = () => {
     const newItem = emptyItem();
     setForm(f => ({ ...f, items: [...f.items, newItem] }));
     setAmountDisplays(d => ({ ...d, [newItem.id]: '' }));
   };
+
   const removeItem = (id) => {
     setForm(f => ({ ...f, items: f.items.filter(i => i.id !== id) }));
     setAmountDisplays(d => { const nd = {...d}; delete nd[id]; return nd; });
   };
 
-  // TL input handler
   const handleAmountChange = (itemId, rawValue) => {
-    // Sadece rakam ve virgül/nokta kabul et
     const cleaned = rawValue.replace(/[^0-9,.]/g, '');
     setAmountDisplays(d => ({ ...d, [itemId]: cleaned }));
-    const num = parseTRY(cleaned);
-    setItem(itemId, 'amount', num);
+    setItem(itemId, 'amount', parseTRY(cleaned));
   };
 
   const handleAmountBlur = (itemId, rawValue) => {
@@ -116,31 +114,42 @@ export default function ExpenseTracker() {
   };
 
   const handleAmountFocus = (itemId, currentDisplay) => {
-    // Focus'ta formatı kaldır, düz sayı göster
     const num = parseTRY(currentDisplay);
     setAmountDisplays(d => ({ ...d, [itemId]: num > 0 ? String(num) : '' }));
   };
 
-  const totalTRY = useMemo(() => {
-    return form.items.reduce((s, i) => s + Number(i.amount || 0), 0);
-  }, [form.items]);
+  const totalTRY = useMemo(() =>
+    form.items.reduce((s, i) => s + Number(i.amount || 0), 0), [form.items]);
+
+  // Seçili artikel bilgisi
+  const selectedArticle = useMemo(() =>
+    orderArticles.find(a => a.quotationId === form.articleId), [orderArticles, form.articleId]);
 
   const handleSave = async () => {
-    if (!form.model) { alert('Sipariş seçin veya model adı girin'); return; }
+    if (!form.salesOrderId) { alert('Sipariş seçin'); return; }
+    if (form.expenseType === 'article' && !form.articleId) { alert('Artikel seçin'); return; }
     setSaving(true);
     try {
+      // Ortak gider için sipariş toplam adetini hesapla
+      const totalOrderQty = (selectedOrder?.items || []).reduce((s, i) => s + Number(i.orderQty || 0), 0);
+
       const payload = {
-        model:        form.model,
-        article:      form.article,
-        invoice_no:   form.invoiceNo,
-        invoice_date: form.invoiceDate,
-        supplier:     form.supplier,
-        notes:        form.notes,
-        currency:     'TRY',
-        items:        form.items,
-        total_amount: totalTRY,
-        updated_at:   new Date().toISOString(),
+        sales_order_id: form.salesOrderId,
+        expense_type:   form.expenseType,
+        article_id:     form.expenseType === 'article' ? form.articleId : null,
+        // model/article bilgisini seçilen artikelden al
+        model:          form.expenseType === 'article' ? (selectedArticle?.model || '') : (selectedOrder?.customer || ''),
+        article:        form.expenseType === 'article' ? (selectedArticle?.article || '') : 'ORTAK GİDER',
+        invoice_no:     form.invoiceNo,
+        invoice_date:   form.invoiceDate,
+        supplier:       form.supplier,
+        notes:          form.notes,
+        currency:       'TRY',
+        items:          form.items,
+        total_amount:   totalTRY,
+        updated_at:     new Date().toISOString(),
       };
+
       if (activeId) {
         const { error } = await supabase.from('expenses').update(payload).eq('id', activeId);
         if (error) throw error;
@@ -167,30 +176,23 @@ export default function ExpenseTracker() {
 
   const handleLoad = (exp) => {
     setForm({
-      salesOrderId: '',
-      model:        exp.model || '',
-      article:      exp.article || '',
+      salesOrderId: exp.sales_order_id || '',
+      expenseType:  exp.expense_type || 'article',
+      articleId:    exp.article_id || '',
       invoiceNo:    exp.invoice_no || '',
       invoiceDate:  exp.invoice_date || new Date().toISOString().split('T')[0],
       supplier:     exp.supplier || '',
       notes:        exp.notes || '',
       items:        exp.items?.length ? exp.items : [emptyItem()],
     });
-    // Display değerlerini ayarla
     const displays = {};
-    (exp.items || []).forEach(i => {
-      displays[i.id] = fmtTRY(i.amount);
-    });
+    (exp.items || []).forEach(i => { displays[i.id] = fmtTRY(i.amount); });
     setAmountDisplays(displays);
     setActiveId(exp.id);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const handleNew = () => {
-    setForm(emptyForm());
-    setAmountDisplays({});
-    setActiveId(null);
-  };
+  const handleNew = () => { setForm(emptyForm()); setAmountDisplays({}); setActiveId(null); };
 
   return (
     <div className="max-w-5xl mx-auto p-4 md:p-6 pb-32 space-y-5">
@@ -203,7 +205,7 @@ export default function ExpenseTracker() {
             <h1 className="text-xl md:text-2xl font-black text-slate-900 tracking-tighter uppercase leading-none">
               {activeId ? 'Gider Güncelle' : 'Gider Girişi'}
             </h1>
-            <p className="text-[10px] text-slate-400 font-bold tracking-[0.2em] uppercase mt-0.5">Model Bazlı Maliyet Takibi</p>
+            <p className="text-[10px] text-slate-400 font-bold tracking-[0.2em] uppercase mt-0.5">Sipariş Bazlı Maliyet Takibi</p>
           </div>
         </div>
         <div className="flex gap-3">
@@ -219,27 +221,83 @@ export default function ExpenseTracker() {
       {/* FORM */}
       <div className="bg-white border border-slate-100 rounded-3xl p-6 shadow-sm space-y-5">
 
-        {/* ✅ Sipariş Seçimi */}
+        {/* Sipariş & Gider Tipi */}
         <div>
           <div className="flex items-center gap-2 mb-4 pb-3 border-b border-slate-50">
             <div className="w-1.5 h-4 bg-slate-900 rounded-full"></div>
-            <h2 className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em]">Sipariş Seçimi</h2>
-          </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Sipariş Listesinden Seç</label>
-            <select value={form.salesOrderId} onChange={e => handleOrderSelect(e.target.value)}
-              className={iCls + ' cursor-pointer'}>
-              <option value="">— Sipariş seçin —</option>
-              {salesOrders.map(o => (
-                <option key={o.id} value={o.id}>
-                  {o.customer}{o.season ? ` · ${o.season}` : ''} — {(o.items || []).map(i => i.article).join(', ')}
-                  {o.order_date ? ` (${new Date(o.order_date).toLocaleDateString('tr-TR')})` : ''}
-                </option>
-              ))}
-            </select>
+            <h2 className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em]">Sipariş & Gider Tipi</h2>
           </div>
 
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Sipariş Seç */}
+            <div className="flex flex-col gap-1">
+              <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Sipariş *</label>
+              <select value={form.salesOrderId} onChange={e => handleOrderSelect(e.target.value)}
+                className={iCls + ' cursor-pointer'}>
+                <option value="">— Sipariş seçin —</option>
+                {salesOrders.map(o => (
+                  <option key={o.id} value={o.id}>
+                    {o.customer}{o.season ? ` · ${o.season}` : ''} — {(o.items || []).map(i => i.article).join(', ')}
+                  </option>
+                ))}
+              </select>
+            </div>
 
+            {/* Gider Tipi */}
+            <div className="flex flex-col gap-1">
+              <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Gider Tipi *</label>
+              <div className="flex bg-slate-50 rounded-xl border border-slate-200 overflow-hidden h-9">
+                {[
+                  { value: 'article', label: 'Artikel Bazlı' },
+                  { value: 'shared',  label: 'Ortak (Adet Bazlı)' },
+                ].map(opt => (
+                  <button key={opt.value} type="button"
+                    onClick={() => setField('expenseType', opt.value)}
+                    className={`flex-1 text-[10px] font-black uppercase tracking-widest transition-all ${
+                      form.expenseType === opt.value ? 'bg-slate-900 text-white' : 'text-slate-400 hover:text-slate-700'
+                    }`}>
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Artikel Seçimi — sadece artikel bazlı ise */}
+          {form.expenseType === 'article' && form.salesOrderId && (
+            <div className="mt-3 flex flex-col gap-1">
+              <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Artikel *</label>
+              <select value={form.articleId} onChange={e => setField('articleId', e.target.value)}
+                className={iCls + ' cursor-pointer'}>
+                <option value="">— Artikel seçin —</option>
+                {orderArticles.map((item, i) => (
+                  <option key={item.quotationId || i} value={item.quotationId}>
+                    {item.article} — {item.model}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* Ortak gider açıklaması */}
+          {form.expenseType === 'shared' && form.salesOrderId && (
+            <div className="mt-3 p-3 bg-blue-50 border border-blue-100 rounded-2xl">
+              <p className="text-[10px] font-black text-blue-600 uppercase tracking-widest">
+                Bu gider siparişin tüm artikellerine sipariş adetine orantılı dağıtılacak:
+              </p>
+              <div className="flex gap-3 mt-2 flex-wrap">
+                {orderArticles.map((item, i) => {
+                  const totalQty = orderArticles.reduce((s, a) => s + Number(a.orderQty || 0), 0);
+                  const pct = totalQty > 0 ? ((Number(item.orderQty || 0) / totalQty) * 100).toFixed(1) : 0;
+                  return (
+                    <span key={i} className="text-[9px] font-black bg-white text-blue-700 px-2 py-1 rounded-lg border border-blue-200">
+                      {item.article}: %{pct} ({Number(item.orderQty || 0).toLocaleString()} adet)
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Fatura Bilgileri */}
@@ -274,7 +332,7 @@ export default function ExpenseTracker() {
             <div className="flex items-center gap-2">
               <div className="w-1.5 h-4 bg-amber-500 rounded-full"></div>
               <h2 className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em]">Fatura Kalemleri</h2>
-              <span className="text-[9px] font-black text-amber-600 bg-amber-50 px-2 py-0.5 rounded-lg border border-amber-100">TL</span>
+              <span className="text-[9px] font-black text-amber-600 bg-amber-50 px-2 py-0.5 rounded-lg border border-amber-100">TL · KDV Hariç</span>
             </div>
             <button onClick={addItem} className="text-[9px] font-black text-blue-600 bg-blue-50 px-2.5 py-1 rounded-lg border border-blue-100 hover:bg-blue-600 hover:text-white transition-all flex items-center gap-1">
               <Plus size={10}/> Kalem Ekle
@@ -284,7 +342,7 @@ export default function ExpenseTracker() {
           <div className="grid grid-cols-12 gap-2 px-2 mb-2 text-[8px] font-black text-slate-400 uppercase tracking-widest">
             <div className="col-span-3">Kategori</div>
             <div className="col-span-5">Açıklama</div>
-            <div className="col-span-3 text-right">Tutar (TL)</div>
+            <div className="col-span-3 text-right">Tutar (TL, KDV Hariç)</div>
             <div className="col-span-1"></div>
           </div>
 
@@ -302,22 +360,18 @@ export default function ExpenseTracker() {
                     placeholder="Açıklama" className="w-full h-9 px-3 bg-white border border-slate-200 rounded-lg text-sm font-bold outline-none focus:ring-2 focus:ring-blue-100 transition-all"/>
                 </div>
                 <div className="col-span-3">
-                  {/* ✅ Binlik ayraçlı TL input */}
-                  <div className="flex flex-col gap-1">
-                    <div className="flex bg-white border border-slate-200 rounded-lg overflow-hidden h-9 focus-within:ring-2 focus-within:ring-amber-200">
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={amountDisplays[item.id] ?? fmtTRY(item.amount)}
-                        onChange={e => handleAmountChange(item.id, e.target.value)}
-                        onFocus={e => handleAmountFocus(item.id, e.target.value)}
-                        onBlur={e => handleAmountBlur(item.id, e.target.value)}
-                        placeholder="0,00"
-                        className="flex-1 px-3 bg-transparent outline-none text-sm font-black text-right"
-                      />
-                      <div className="px-2 flex items-center text-[10px] font-black text-amber-600 bg-amber-50 border-l border-slate-200">₺</div>
-                    </div>
-                    <span className="text-[8px] font-black text-slate-300 uppercase tracking-widest text-right">KDV Hariç</span>
+                  <div className="flex bg-white border border-slate-200 rounded-lg overflow-hidden h-9 focus-within:ring-2 focus-within:ring-amber-200">
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      value={amountDisplays[item.id] ?? fmtTRY(item.amount)}
+                      onChange={e => handleAmountChange(item.id, e.target.value)}
+                      onFocus={e => handleAmountFocus(item.id, e.target.value)}
+                      onBlur={e => handleAmountBlur(item.id, e.target.value)}
+                      placeholder="0,00"
+                      className="flex-1 px-3 bg-transparent outline-none text-sm font-black text-right"
+                    />
+                    <div className="px-2 flex items-center text-[10px] font-black text-amber-600 bg-amber-50 border-l border-slate-200">₺</div>
                   </div>
                 </div>
                 <div className="col-span-1 text-right">
@@ -331,10 +385,9 @@ export default function ExpenseTracker() {
             ))}
           </div>
 
-          {/* Toplam */}
           <div className="mt-4 flex justify-end">
             <div className="bg-slate-900 text-white px-6 py-3 rounded-2xl text-right">
-              <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Fatura Toplamı</div>
+              <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Fatura Toplamı (KDV Hariç)</div>
               <div className="text-lg font-black mt-0.5">₺{fmtTRY(totalTRY)}</div>
             </div>
           </div>
@@ -351,7 +404,7 @@ export default function ExpenseTracker() {
         <div className="bg-white border border-slate-100 rounded-2xl p-3 shadow-sm relative">
           <Search size={15} className="absolute left-6 top-1/2 -translate-y-1/2 text-slate-400"/>
           <input type="text" value={search} onChange={e => setSearch(e.target.value)}
-            placeholder="Model, artikel, tedarikçi veya fatura no ara..."
+            placeholder="Tedarikçi, fatura no ara..."
             className="w-full pl-9 pr-4 py-2 bg-slate-50 rounded-xl outline-none text-[11px] font-bold"/>
         </div>
 
@@ -364,6 +417,7 @@ export default function ExpenseTracker() {
             {filtered.map(exp => {
               const isOpen = expandedId === exp.id;
               const total = (exp.items || []).reduce((s, i) => s + Number(i.amount || 0), 0);
+              const isShared = exp.expense_type === 'shared';
               return (
                 <div key={exp.id} className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-hidden">
                   <div className="flex items-center">
@@ -371,9 +425,10 @@ export default function ExpenseTracker() {
                       className="flex-1 p-4 flex items-center justify-between hover:bg-slate-50/50 transition-colors text-left">
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-black text-slate-900 text-sm uppercase">{exp.model}</span>
-                          {exp.article && <span className="text-[9px] font-black bg-blue-50 text-blue-700 px-2 py-0.5 rounded-md border border-blue-100">{exp.article}</span>}
-                          {exp.supplier && <span className="text-[9px] font-black bg-slate-100 text-slate-500 px-2 py-0.5 rounded-md">{exp.supplier}</span>}
+                          {exp.supplier && <span className="font-black text-slate-900 text-sm uppercase">{exp.supplier}</span>}
+                          <span className={`text-[9px] font-black px-2 py-0.5 rounded-md border uppercase ${isShared ? 'bg-blue-50 text-blue-700 border-blue-100' : 'bg-amber-50 text-amber-700 border-amber-100'}`}>
+                            {isShared ? 'Ortak' : exp.article || 'Artikel'}
+                          </span>
                           {exp.invoice_no && <span className="text-[9px] font-bold text-slate-400">#{exp.invoice_no}</span>}
                         </div>
                         <div className="text-[9px] text-slate-300 font-bold mt-0.5">

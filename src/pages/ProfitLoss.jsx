@@ -106,12 +106,25 @@ export default function ProfitLoss() {
       map[key].quotations.push(q);
     });
 
-    // Expense'leri ekle
+    // Expense'leri ekle — artikel bazlı direkt, ortak gider ilgili tüm modellere
     expenses.forEach(e => {
-      const key = (e.model || '').toLocaleLowerCase('tr-TR').trim();
-      if (!key) return;
-      if (!map[key]) map[key] = { model: e.model, article: e.article, quotations: [], expenses: [] };
-      map[key].expenses.push(e);
+      if (e.expense_type === 'shared' && e.sales_order_id) {
+        // Ortak gider: o siparişin tüm artikellerine ekle
+        const order = salesOrders.find(o => o.id === e.sales_order_id);
+        if (order) {
+          (order.items || []).forEach(item => {
+            const key = (item.model || '').toLocaleLowerCase('tr-TR').trim();
+            if (!key) return;
+            if (!map[key]) map[key] = { model: item.model, article: item.article, quotations: [], expenses: [] };
+            if (!map[key].expenses.find(ex => ex.id === e.id)) map[key].expenses.push(e);
+          });
+        }
+      } else {
+        const key = (e.model || '').toLocaleLowerCase('tr-TR').trim();
+        if (!key) return;
+        if (!map[key]) map[key] = { model: e.model, article: e.article, quotations: [], expenses: [] };
+        map[key].expenses.push(e);
+      }
     });
 
     return Object.values(map);
@@ -252,14 +265,22 @@ export default function ProfitLoss() {
           const totalPcs = Number(latestQ?.total_pcs || 0);
           const totalRevenueUSD = quotedUSD * totalPcs;
 
-          // Gerçekleşen giderler — kur hesabı
+          // Gerçekleşen giderler — artikel bazlı + ortak giderin payı
           const totalExpenseUSD = m.expenses.reduce((sum, exp) => {
-            return sum + (exp.items || []).reduce((s, item) => {
-              const amt = Number(item.amount || 0);
-              if (item.currency === 'USD') return s + amt;
-              if (item.currency === 'EUR') return s + amt / r.EUR;
-              return s + amt / r.TRY;
-            }, 0);
+            const expTotal = (exp.items || []).reduce((s, item) => s + Number(item.amount || 0), 0);
+            // TL cinsinden, USD'ye çevir
+            const expUSD = expTotal / r.TRY;
+
+            if (exp.expense_type === 'shared' && exp.sales_order_id) {
+              // Ortak gider: bu modelin adet payına göre böl
+              const order = salesOrders?.find(o => o.id === exp.sales_order_id);
+              if (!order) return sum + expUSD; // order bulunamazsa tamamını ekle
+              const totalOrderQty = (order.items || []).reduce((s, i) => s + Number(i.orderQty || 0), 0);
+              const thisArticleQty = (order.items || []).find(i => i.model?.toLocaleLowerCase('tr-TR') === m.model?.toLocaleLowerCase('tr-TR'))?.orderQty || 0;
+              const share = totalOrderQty > 0 ? Number(thisArticleQty) / totalOrderQty : 0;
+              return sum + expUSD * share;
+            }
+            return sum + expUSD;
           }, 0);
 
           const profitUSD = totalRevenueUSD - totalExpenseUSD;
