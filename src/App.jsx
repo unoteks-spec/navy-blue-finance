@@ -5,12 +5,15 @@ import Quotation from './pages/Quotation';
 import QuotationHistory from './pages/QuotationHistory';
 import ExpenseTracker from './pages/ExpenseTracker';
 import ProfitLoss from './pages/ProfitLoss';
+import SalesOrderCreate from './pages/SalesOrderCreate';
+import SalesOrderList from './pages/SalesOrderList';
 
-import { Calculator, Clock, Receipt, TrendingUp, LogOut } from 'lucide-react';
+import { Calculator, Clock, Receipt, TrendingUp, ShoppingBag, List, LogOut } from 'lucide-react';
 
 function App() {
   const [session, setSession]       = useState(null);
   const [activePage, setActivePage] = useState('quotation');
+  const [editingOrder, setEditingOrder] = useState(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => setSession(session));
@@ -24,13 +27,20 @@ function App() {
     }
   };
 
+  const handleEditOrder = (order) => {
+    setEditingOrder(order);
+    setActivePage('order-create');
+  };
+
   if (!session) return <Login/>;
 
   const navItems = [
-    { key: 'quotation',         label: 'Yeni Teklif',      icon: Calculator },
-    { key: 'quotation-history', label: 'Teklif Geçmişi',   icon: Clock },
-    { key: 'expenses',          label: 'Gider Girişi',      icon: Receipt },
-    { key: 'profit-loss',       label: 'Kar / Zarar',       icon: TrendingUp },
+    { key: 'quotation',         label: 'Teklif',      icon: Calculator },
+    { key: 'quotation-history', label: 'Teklif Geç.', icon: Clock },
+    { key: 'order-create',      label: 'Yeni Sipariş',icon: ShoppingBag },
+    { key: 'order-list',        label: 'Siparişler',  icon: List },
+    { key: 'expenses',          label: 'Gider',        icon: Receipt },
+    { key: 'profit-loss',       label: 'Kar/Zarar',   icon: TrendingUp },
   ];
 
   return (
@@ -38,17 +48,19 @@ function App() {
       <main>
         {activePage === 'quotation'         && <Quotation/>}
         {activePage === 'quotation-history' && <QuotationHistory/>}
+        {activePage === 'order-create'      && <SalesOrderCreate onSaved={() => setActivePage('order-list')}/>}
+        {activePage === 'order-list'        && <SalesOrderList onEdit={handleEditOrder}/>}
         {activePage === 'expenses'          && <ExpenseTracker/>}
         {activePage === 'profit-loss'       && <ProfitLoss/>}
       </main>
 
-      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-slate-900/90 backdrop-blur-xl px-5 py-4 rounded-[2.5rem] shadow-2xl flex items-center gap-5 z-50 border border-white/10">
+      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-slate-900/90 backdrop-blur-xl px-5 py-4 rounded-[2.5rem] shadow-2xl flex items-center gap-4 md:gap-5 z-50 border border-white/10 max-w-[95vw] overflow-x-auto no-scrollbar">
         {navItems.map((item, i) => {
           const Icon = item.icon;
           const isActive = activePage === item.key;
           return (
             <React.Fragment key={item.key}>
-              <button onClick={() => setActivePage(item.key)}
+              <button onClick={() => { setEditingOrder(null); setActivePage(item.key); }}
                 className={`flex flex-col items-center gap-1 transition-all duration-300 shrink-0 ${isActive ? 'text-blue-400 scale-110' : 'text-slate-500 hover:text-slate-300'}`}>
                 <Icon size={18} strokeWidth={isActive ? 2.5 : 2}/>
                 <span className="text-[8px] font-black uppercase tracking-tighter">{item.label}</span>
