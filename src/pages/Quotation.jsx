@@ -34,7 +34,7 @@ const emptyForm = () => ({
   overhead: '', margin: '', commission: '',
   freightEur: '', insuranceEur: '',
   deliveryType: 'FOB',
-  quotedPrice: '', quotedCurrency: 'USD',
+  quotedPrice: '', quotedCurrency: 'EUR',
 });
 
 // ✅ COMPONENT DIŞINDA TANIMLANDI — re-render'da yeniden oluşmaz, focus sorunu yok

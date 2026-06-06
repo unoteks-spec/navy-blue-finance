@@ -2,31 +2,47 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../api/supabaseClient';
 import { Receipt, Plus, Trash2, Save, Search, ChevronDown, ChevronUp } from 'lucide-react';
 
-const CURRENCIES = ['TRY', 'USD', 'EUR'];
 const CATEGORIES = ['Kumaş', 'Garni', 'Dikim', 'Baskı', 'Nakış', 'Yıkama', 'İlik-Düğme', 'Ütü-Ambalaj', 'Etiket', 'Aksesuar', 'Nakliye', 'Diğer'];
-const sanitize = (v) => v.replace(/[^0-9.]/g, '').replace(/(\..*)\./g, '$1');
-const fmtC = (n, d = 2) => (isNaN(n) || !n) ? '—' : Number(n).toFixed(d);
 
-const emptyItem = () => ({ id: Date.now() + Math.random(), category: 'Kumaş', description: '', amount: '', currency: 'TRY' });
+// ✅ Binlik ayraçlı TL formatı
+const fmtTRY = (v) => {
+  if (!v && v !== 0) return '';
+  const num = Number(String(v).replace(/\./g, '').replace(',', '.'));
+  if (isNaN(num)) return '';
+  return num.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
+
+// Input değerinden sayıya çevir (1.234,56 → 1234.56)
+const parseTRY = (v) => {
+  const cleaned = String(v).replace(/\./g, '').replace(',', '.');
+  return isNaN(Number(cleaned)) ? 0 : Number(cleaned);
+};
+
+const fmtC = (n, d = 2) => (isNaN(n) || !n) ? '—' : Number(n).toFixed(d);
+const iCls = 'w-full h-9 px-3 bg-slate-50 border border-slate-200 rounded-lg text-sm font-bold outline-none focus:ring-2 focus:ring-blue-100 focus:bg-white transition-all';
+
+const emptyItem = () => ({ id: Date.now() + Math.random(), category: 'Kumaş', description: '', amount: '' });
 
 const emptyForm = () => ({
+  salesOrderId: '',
   model: '', article: '',
   invoiceNo: '', invoiceDate: new Date().toISOString().split('T')[0],
   supplier: '', notes: '',
   items: [emptyItem()],
 });
 
-const iCls = 'w-full h-9 px-3 bg-slate-50 border border-slate-200 rounded-lg text-sm font-bold outline-none focus:ring-2 focus:ring-blue-100 focus:bg-white transition-all';
-
 export default function ExpenseTracker() {
-  const [form, setForm]         = useState(emptyForm());
-  const [saving, setSaving]     = useState(false);
-  const [saveMsg, setSaveMsg]   = useState('');
-  const [activeId, setActiveId] = useState(null);
-  const [list, setList]         = useState([]);
-  const [loading, setLoading]   = useState(true);
-  const [search, setSearch]     = useState('');
+  const [form, setForm]           = useState(emptyForm());
+  const [saving, setSaving]       = useState(false);
+  const [saveMsg, setSaveMsg]     = useState('');
+  const [activeId, setActiveId]   = useState(null);
+  const [list, setList]           = useState([]);
+  const [loading, setLoading]     = useState(true);
+  const [search, setSearch]       = useState('');
   const [expandedId, setExpandedId] = useState(null);
+  const [salesOrders, setSalesOrders] = useState([]);
+  // TL input display değerleri
+  const [amountDisplays, setAmountDisplays] = useState({});
 
   const load = async () => {
     setLoading(true);
@@ -35,30 +51,82 @@ export default function ExpenseTracker() {
     setLoading(false);
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    // Sales orders yükle
+    supabase.from('sales_orders').select('id, customer, season, items, order_date')
+      .order('created_at', { ascending: false })
+      .then(({ data }) => setSalesOrders(data || []));
+  }, []);
+
+  // Sales order seçilince model ve artikel doldur
+  const handleOrderSelect = (orderId) => {
+    const order = salesOrders.find(o => o.id === orderId);
+    if (!order) {
+      setForm(f => ({ ...f, salesOrderId: '', model: '', article: '' }));
+      return;
+    }
+    // İlk artikeli al (birden fazla varsa kullanıcı değiştirebilir)
+    const firstItem = order.items?.[0];
+    setForm(f => ({
+      ...f,
+      salesOrderId: orderId,
+      model:   firstItem?.model   || '',
+      article: firstItem?.article || '',
+    }));
+  };
 
   const filtered = useMemo(() => {
     if (!search.trim()) return list;
     const q = search.toLocaleLowerCase('tr-TR');
     return list.filter(e =>
-      (e.model    || '').toLocaleLowerCase('tr-TR').includes(q) ||
-      (e.article  || '').toLocaleLowerCase('tr-TR').includes(q) ||
-      (e.supplier || '').toLocaleLowerCase('tr-TR').includes(q) ||
+      (e.model      || '').toLocaleLowerCase('tr-TR').includes(q) ||
+      (e.article    || '').toLocaleLowerCase('tr-TR').includes(q) ||
+      (e.supplier   || '').toLocaleLowerCase('tr-TR').includes(q) ||
       (e.invoice_no || '').toLocaleLowerCase('tr-TR').includes(q)
     );
   }, [list, search]);
 
   const setField = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const setItem  = (id, k, v) => setForm(f => ({ ...f, items: f.items.map(i => i.id === id ? { ...i, [k]: v } : i) }));
-  const addItem    = () => setForm(f => ({ ...f, items: [...f.items, emptyItem()] }));
-  const removeItem = (id) => setForm(f => ({ ...f, items: f.items.filter(i => i.id !== id) }));
+  const addItem    = () => {
+    const newItem = emptyItem();
+    setForm(f => ({ ...f, items: [...f.items, newItem] }));
+    setAmountDisplays(d => ({ ...d, [newItem.id]: '' }));
+  };
+  const removeItem = (id) => {
+    setForm(f => ({ ...f, items: f.items.filter(i => i.id !== id) }));
+    setAmountDisplays(d => { const nd = {...d}; delete nd[id]; return nd; });
+  };
+
+  // TL input handler
+  const handleAmountChange = (itemId, rawValue) => {
+    // Sadece rakam ve virgül/nokta kabul et
+    const cleaned = rawValue.replace(/[^0-9,.]/g, '');
+    setAmountDisplays(d => ({ ...d, [itemId]: cleaned }));
+    const num = parseTRY(cleaned);
+    setItem(itemId, 'amount', num);
+  };
+
+  const handleAmountBlur = (itemId, rawValue) => {
+    const num = parseTRY(rawValue);
+    if (!isNaN(num) && num > 0) {
+      setAmountDisplays(d => ({ ...d, [itemId]: fmtTRY(num) }));
+    }
+  };
+
+  const handleAmountFocus = (itemId, currentDisplay) => {
+    // Focus'ta formatı kaldır, düz sayı göster
+    const num = parseTRY(currentDisplay);
+    setAmountDisplays(d => ({ ...d, [itemId]: num > 0 ? String(num) : '' }));
+  };
 
   const totalTRY = useMemo(() => {
     return form.items.reduce((s, i) => s + Number(i.amount || 0), 0);
   }, [form.items]);
 
   const handleSave = async () => {
-    if (!form.model) { alert('Model adı zorunlu'); return; }
+    if (!form.model) { alert('Sipariş seçin veya model adı girin'); return; }
     setSaving(true);
     try {
       const payload = {
@@ -68,11 +136,11 @@ export default function ExpenseTracker() {
         invoice_date: form.invoiceDate,
         supplier:     form.supplier,
         notes:        form.notes,
+        currency:     'TRY',
         items:        form.items,
         total_amount: totalTRY,
         updated_at:   new Date().toISOString(),
       };
-
       if (activeId) {
         const { error } = await supabase.from('expenses').update(payload).eq('id', activeId);
         if (error) throw error;
@@ -99,19 +167,30 @@ export default function ExpenseTracker() {
 
   const handleLoad = (exp) => {
     setForm({
-      model:       exp.model || '',
-      article:     exp.article || '',
-      invoiceNo:   exp.invoice_no || '',
-      invoiceDate: exp.invoice_date || new Date().toISOString().split('T')[0],
-      supplier:    exp.supplier || '',
-      notes:       exp.notes || '',
-      items:       exp.items?.length ? exp.items : [emptyItem()],
+      salesOrderId: '',
+      model:        exp.model || '',
+      article:      exp.article || '',
+      invoiceNo:    exp.invoice_no || '',
+      invoiceDate:  exp.invoice_date || new Date().toISOString().split('T')[0],
+      supplier:     exp.supplier || '',
+      notes:        exp.notes || '',
+      items:        exp.items?.length ? exp.items : [emptyItem()],
     });
+    // Display değerlerini ayarla
+    const displays = {};
+    (exp.items || []).forEach(i => {
+      displays[i.id] = fmtTRY(i.amount);
+    });
+    setAmountDisplays(displays);
     setActiveId(exp.id);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const handleNew = () => { setForm(emptyForm()); setActiveId(null); };
+  const handleNew = () => {
+    setForm(emptyForm());
+    setAmountDisplays({});
+    setActiveId(null);
+  };
 
   return (
     <div className="max-w-5xl mx-auto p-4 md:p-6 pb-32 space-y-5">
@@ -139,22 +218,50 @@ export default function ExpenseTracker() {
 
       {/* FORM */}
       <div className="bg-white border border-slate-100 rounded-3xl p-6 shadow-sm space-y-5">
-        {/* Temel Bilgiler */}
+
+        {/* ✅ Sipariş Seçimi */}
         <div>
           <div className="flex items-center gap-2 mb-4 pb-3 border-b border-slate-50">
             <div className="w-1.5 h-4 bg-slate-900 rounded-full"></div>
+            <h2 className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em]">Sipariş Seçimi</h2>
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Sipariş Listesinden Seç</label>
+            <select value={form.salesOrderId} onChange={e => handleOrderSelect(e.target.value)}
+              className={iCls + ' cursor-pointer'}>
+              <option value="">— Sipariş seçin —</option>
+              {salesOrders.map(o => (
+                <option key={o.id} value={o.id}>
+                  {o.customer}{o.season ? ` · ${o.season}` : ''} — {(o.items || []).map(i => i.article).join(', ')}
+                  {o.order_date ? ` (${new Date(o.order_date).toLocaleDateString('tr-TR')})` : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Seçilen siparişten gelen model/artikel — düzenlenebilir */}
+          {form.salesOrderId && (
+            <div className="grid grid-cols-2 gap-3 mt-3">
+              <div className="flex flex-col gap-1">
+                <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Model</label>
+                <input type="text" value={form.model} onChange={e => setField('model', e.target.value)} className={iCls}/>
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Artikel</label>
+                <input type="text" value={form.article} onChange={e => setField('article', e.target.value)} className={iCls}/>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Fatura Bilgileri */}
+        <div>
+          <div className="flex items-center gap-2 mb-4 pb-3 border-b border-slate-50">
+            <div className="w-1.5 h-4 bg-blue-600 rounded-full"></div>
             <h2 className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em]">Fatura Bilgileri</h2>
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-            <div className="flex flex-col gap-1">
-              <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Model Adı *</label>
-              <input type="text" value={form.model} onChange={e => setField('model', e.target.value)} placeholder="Model adı" className={iCls}/>
-            </div>
-            <div className="flex flex-col gap-1">
-              <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Artikel</label>
-              <input type="text" value={form.article} onChange={e => setField('article', e.target.value)} placeholder="Artikel no" className={iCls}/>
-            </div>
-            <div className="flex flex-col gap-1">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="flex flex-col gap-1 md:col-span-2">
               <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Tedarikçi</label>
               <input type="text" value={form.supplier} onChange={e => setField('supplier', e.target.value)} placeholder="Tedarikçi adı" className={iCls}/>
             </div>
@@ -166,10 +273,10 @@ export default function ExpenseTracker() {
               <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Fatura Tarihi</label>
               <input type="date" value={form.invoiceDate} onChange={e => setField('invoiceDate', e.target.value)} className={iCls}/>
             </div>
-            <div className="flex flex-col gap-1">
-              <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Not</label>
-              <input type="text" value={form.notes} onChange={e => setField('notes', e.target.value)} placeholder="Opsiyonel not" className={iCls}/>
-            </div>
+          </div>
+          <div className="mt-3">
+            <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Not</label>
+            <input type="text" value={form.notes} onChange={e => setField('notes', e.target.value)} placeholder="Opsiyonel not" className={iCls + ' mt-1'}/>
           </div>
         </div>
 
@@ -177,20 +284,19 @@ export default function ExpenseTracker() {
         <div>
           <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-50">
             <div className="flex items-center gap-2">
-              <div className="w-1.5 h-4 bg-blue-600 rounded-full"></div>
+              <div className="w-1.5 h-4 bg-amber-500 rounded-full"></div>
               <h2 className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em]">Fatura Kalemleri</h2>
+              <span className="text-[9px] font-black text-amber-600 bg-amber-50 px-2 py-0.5 rounded-lg border border-amber-100">TL</span>
             </div>
             <button onClick={addItem} className="text-[9px] font-black text-blue-600 bg-blue-50 px-2.5 py-1 rounded-lg border border-blue-100 hover:bg-blue-600 hover:text-white transition-all flex items-center gap-1">
               <Plus size={10}/> Kalem Ekle
             </button>
           </div>
 
-          {/* Tablo Başlığı */}
           <div className="grid grid-cols-12 gap-2 px-2 mb-2 text-[8px] font-black text-slate-400 uppercase tracking-widest">
             <div className="col-span-3">Kategori</div>
-            <div className="col-span-4">Açıklama</div>
-            <div className="col-span-2 text-right">Tutar</div>
-            <div className="col-span-2">Döviz</div>
+            <div className="col-span-5">Açıklama</div>
+            <div className="col-span-3 text-right">Tutar (TL)</div>
             <div className="col-span-1"></div>
           </div>
 
@@ -203,21 +309,25 @@ export default function ExpenseTracker() {
                     {CATEGORIES.map(c => <option key={c}>{c}</option>)}
                   </select>
                 </div>
-                <div className="col-span-4">
+                <div className="col-span-5">
                   <input type="text" value={item.description} onChange={e => setItem(item.id, 'description', e.target.value)}
                     placeholder="Açıklama" className="w-full h-9 px-3 bg-white border border-slate-200 rounded-lg text-sm font-bold outline-none focus:ring-2 focus:ring-blue-100 transition-all"/>
                 </div>
-                <div className="col-span-2">
-                  <input type="text" inputMode="decimal" value={item.amount}
-                    onChange={e => setItem(item.id, 'amount', sanitize(e.target.value))}
-                    onFocus={e => e.target.select()} placeholder="0.00"
-                    className="w-full h-9 px-3 bg-white border border-slate-200 rounded-lg text-sm font-black outline-none focus:ring-2 focus:ring-blue-100 transition-all text-right"/>
-                </div>
-                <div className="col-span-2">
-                  <select value={item.currency} onChange={e => setItem(item.id, 'currency', e.target.value)}
-                    className="w-full h-9 px-2 bg-white border border-slate-200 rounded-lg text-[11px] font-black outline-none cursor-pointer">
-                    {CURRENCIES.map(c => <option key={c}>{c}</option>)}
-                  </select>
+                <div className="col-span-3">
+                  {/* ✅ Binlik ayraçlı TL input */}
+                  <div className="flex bg-white border border-slate-200 rounded-lg overflow-hidden h-9 focus-within:ring-2 focus-within:ring-amber-200">
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      value={amountDisplays[item.id] ?? fmtTRY(item.amount)}
+                      onChange={e => handleAmountChange(item.id, e.target.value)}
+                      onFocus={e => handleAmountFocus(item.id, e.target.value)}
+                      onBlur={e => handleAmountBlur(item.id, e.target.value)}
+                      placeholder="0,00"
+                      className="flex-1 px-3 bg-transparent outline-none text-sm font-black text-right"
+                    />
+                    <div className="px-2 flex items-center text-[10px] font-black text-amber-600 bg-amber-50 border-l border-slate-200">₺</div>
+                  </div>
                 </div>
                 <div className="col-span-1 text-right">
                   {form.items.length > 1 && (
@@ -234,7 +344,7 @@ export default function ExpenseTracker() {
           <div className="mt-4 flex justify-end">
             <div className="bg-slate-900 text-white px-6 py-3 rounded-2xl text-right">
               <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Fatura Toplamı</div>
-              <div className="text-lg font-black mt-0.5">{fmtC(totalTRY)} <span className="text-[10px] text-slate-400">(Girilen döviz cinsinden)</span></div>
+              <div className="text-lg font-black mt-0.5">₺{fmtTRY(totalTRY)}</div>
             </div>
           </div>
         </div>
@@ -263,7 +373,6 @@ export default function ExpenseTracker() {
             {filtered.map(exp => {
               const isOpen = expandedId === exp.id;
               const total = (exp.items || []).reduce((s, i) => s + Number(i.amount || 0), 0);
-
               return (
                 <div key={exp.id} className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-hidden">
                   <div className="flex items-center">
@@ -283,7 +392,7 @@ export default function ExpenseTracker() {
                       <div className="flex items-center gap-4 shrink-0 ml-4">
                         <div className="text-right">
                           <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Toplam</div>
-                          <div className="text-sm font-black text-slate-900">{fmtC(total)}</div>
+                          <div className="text-sm font-black text-slate-900">₺{fmtTRY(total)}</div>
                         </div>
                         {isOpen ? <ChevronUp size={16} className="text-slate-300"/> : <ChevronDown size={16} className="text-slate-300"/>}
                       </div>
@@ -307,7 +416,7 @@ export default function ExpenseTracker() {
                               <span className="text-[9px] font-black bg-amber-50 text-amber-700 px-2 py-0.5 rounded-md border border-amber-100 uppercase">{item.category}</span>
                               <span className="text-[11px] font-bold text-slate-600">{item.description || '—'}</span>
                             </div>
-                            <span className="text-sm font-black text-slate-900">{fmtC(Number(item.amount || 0))} <span className="text-[10px] text-slate-400">{item.currency}</span></span>
+                            <span className="text-sm font-black text-slate-900">₺{fmtTRY(Number(item.amount || 0))}</span>
                           </div>
                         ))}
                       </div>

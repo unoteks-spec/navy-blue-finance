@@ -3,6 +3,7 @@ import { supabase } from '../api/supabaseClient';
 import { TrendingUp, TrendingDown, Search, ChevronDown, ChevronUp } from 'lucide-react';
 
 const fmtC = (n, d = 2) => (isNaN(n) || !n) ? '—' : Number(n).toFixed(d);
+const fmtTRY = (n) => (isNaN(n) || !n) ? '—' : Number(n).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const sym = { USD: '$', EUR: '€', TRY: '₺' };
 
 export default function ProfitLoss() {
@@ -11,20 +12,87 @@ export default function ProfitLoss() {
   const [loading, setLoading]       = useState(true);
   const [search, setSearch]         = useState('');
   const [expandedModel, setExpandedModel] = useState(null);
+  const [displayCurrency, setDisplayCurrency] = useState('TRY'); // ✅ Varsayılan TRY
+
+  const [salesOrders, setSalesOrders] = useState([]);
 
   useEffect(() => {
     const load = async () => {
       setLoading(true);
-      const [qRes, eRes] = await Promise.all([
+      const [qRes, eRes, soRes] = await Promise.all([
         supabase.from('quotations').select('*').order('created_at', { ascending: false }),
         supabase.from('expenses').select('*').order('created_at', { ascending: false }),
+        supabase.from('sales_orders').select('*').order('created_at', { ascending: false }),
       ]);
       setQuotations(qRes.data || []);
       setExpenses(eRes.data || []);
+      setSalesOrders(soRes.data || []);
       setLoading(false);
     };
     load();
   }, []);
+
+  // USD'den seçili dövize çevir
+  const convertFromUSD = (usd, r) => {
+    if (displayCurrency === 'USD') return usd;
+    if (displayCurrency === 'EUR') return usd * (r?.EUR || 1);
+    return usd * (r?.TRY || 1);
+  };
+
+  const displaySym = displayCurrency === 'TRY' ? '₺' : displayCurrency === 'USD' ? '$' : '€';
+  const displayFmt = (n) => {
+    if (displayCurrency === 'TRY') return Number(n).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return Number(n).toFixed(2);
+  };
+
+  // Order bazlı kar/zarar hesabı
+  const orderSummaries = useMemo(() => {
+    return salesOrders.map(order => {
+      const r = { USD: 1, EUR: 1, TRY: 1 }; // kur için quotation'dan alacağız
+
+      // Gelir: her artikel için birim fiyat × sipariş adedi
+      let revenueUSD = 0;
+      const articleKeys = [];
+
+      (order.items || []).forEach(item => {
+        const qty = Number(item.orderQty || 0);
+        const price = Number(item.unitPrice || 0);
+        const currency = item.currency || 'USD';
+        // Kuru quotation'dan al
+        const q = quotations.find(q => q.id === item.quotationId);
+        const qr = q?.rates || { USD: 1, EUR: 1, TRY: 1 };
+        let usd = 0;
+        if (currency === 'USD') usd = price * qty;
+        else if (currency === 'EUR') usd = (price / qr.EUR) * qty;
+        else usd = (price / qr.TRY) * qty;
+        revenueUSD += usd;
+        if (item.model) articleKeys.push((item.model || '').toLocaleLowerCase('tr-TR').trim());
+      });
+
+      // Gider: bu siparişin artikellerine ait tüm expense'ler
+      const relatedExpenses = expenses.filter(exp => {
+        const expKey = (exp.model || '').toLocaleLowerCase('tr-TR').trim();
+        return articleKeys.includes(expKey);
+      });
+
+      // Kur için ilk quotation'ın kurunu al
+      const firstQ = quotations.find(q => q.id === order.items?.[0]?.quotationId);
+      const orderRates = firstQ?.rates || { USD: 1, EUR: 1, TRY: 1 };
+
+      const expenseUSD = relatedExpenses.reduce((sum, exp) => {
+        return sum + (exp.items || []).reduce((s, i) => {
+          const amt = Number(i.amount || 0);
+          // Giderler TL cinsinden
+          return s + amt / orderRates.TRY;
+        }, 0);
+      }, 0);
+
+      const profitUSD = revenueUSD - expenseUSD;
+      const profitPct = revenueUSD > 0 ? (profitUSD / revenueUSD) * 100 : 0;
+
+      return { order, revenueUSD, expenseUSD, profitUSD, profitPct, rates: orderRates };
+    });
+  }, [salesOrders, quotations, expenses]);
 
   // Model bazlı grupla
   const models = useMemo(() => {
@@ -71,13 +139,87 @@ export default function ProfitLoss() {
     <div className="max-w-5xl mx-auto p-4 md:p-6 pb-32 space-y-5">
 
       {/* BAŞLIK */}
-      <div className="flex items-center gap-3">
-        <div className="p-2.5 bg-slate-900 rounded-xl text-white shadow-lg"><TrendingUp size={20}/></div>
-        <div>
-          <h1 className="text-xl md:text-2xl font-black text-slate-900 tracking-tighter uppercase leading-none">Kar / Zarar</h1>
-          <p className="text-[10px] text-slate-400 font-bold tracking-[0.2em] uppercase mt-0.5">Model Bazlı Analiz</p>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="p-2.5 bg-slate-900 rounded-xl text-white shadow-lg"><TrendingUp size={20}/></div>
+          <div>
+            <h1 className="text-xl md:text-2xl font-black text-slate-900 tracking-tighter uppercase leading-none">Kar / Zarar</h1>
+            <p className="text-[10px] text-slate-400 font-bold tracking-[0.2em] uppercase mt-0.5">Model Bazlı Analiz</p>
+          </div>
+        </div>
+        <div className="flex bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+          {['TRY', 'USD', 'EUR'].map(c => (
+            <button key={c} onClick={() => setDisplayCurrency(c)}
+              className={`px-4 py-2 text-[10px] font-black uppercase tracking-widest transition-all ${displayCurrency === c ? 'bg-slate-900 text-white' : 'text-slate-400 hover:text-slate-700'}`}>
+              {c === 'TRY' ? '₺' : c === 'USD' ? '$' : '€'} {c}
+            </button>
+          ))}
         </div>
       </div>
+
+      {/* ORDER BAZLI ÖZET */}
+      {orderSummaries.length > 0 && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <div className="w-1.5 h-4 bg-blue-600 rounded-full"></div>
+            <h2 className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em]">Sipariş Bazlı Özet</h2>
+          </div>
+          <div className="grid gap-3">
+            {orderSummaries.map(({ order, revenueUSD, expenseUSD, profitUSD, profitPct, rates }) => {
+              const isProfit = profitUSD >= 0;
+              const totalQty = (order.items || []).reduce((s, i) => s + Number(i.orderQty || 0), 0);
+              return (
+                <div key={order.id} className={`bg-white border rounded-2xl p-4 shadow-sm flex items-center justify-between gap-4 ${isProfit ? 'border-emerald-100' : 'border-red-100'}`}>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-black text-slate-900 text-sm uppercase">{order.customer}</span>
+                      {order.season && <span className="text-[9px] font-black bg-slate-100 text-slate-500 px-2 py-0.5 rounded-md uppercase">{order.season}</span>}
+                      <span className="text-[9px] font-bold text-slate-300">{(order.items || []).length} artikel · {totalQty.toLocaleString()} adet</span>
+                    </div>
+                    <div className="flex gap-1 mt-1 flex-wrap">
+                      {(order.items || []).map((item, i) => (
+                        <span key={i} className="text-[8px] font-black bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded border border-blue-100 uppercase">{item.article}</span>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-4 shrink-0">
+                    {revenueUSD > 0 && (
+                      <div className="text-right">
+                        <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Gelir</div>
+                        <div className="text-sm font-black text-blue-600">{displaySym}{displayFmt(convertFromUSD(revenueUSD, rates))}</div>
+                      </div>
+                    )}
+                    {expenseUSD > 0 && (
+                      <div className="text-right">
+                        <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Gider</div>
+                        <div className="text-sm font-black text-slate-700">{displaySym}{displayFmt(convertFromUSD(expenseUSD, rates))}</div>
+                      </div>
+                    )}
+                    <div className={`text-right px-4 py-2 rounded-2xl border ${isProfit ? 'bg-emerald-50 border-emerald-100' : 'bg-red-50 border-red-100'}`}>
+                      <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Kar/Zarar</div>
+                      <div className={`text-sm font-black ${isProfit ? 'text-emerald-600' : 'text-red-600'}`}>
+                        {isProfit ? '+' : '-'}{displaySym}{displayFmt(convertFromUSD(Math.abs(profitUSD), rates))}
+                      </div>
+                      <div className={`text-[9px] font-black ${isProfit ? 'text-emerald-500' : 'text-red-500'}`}>
+                        {profitPct >= 0 ? '+' : ''}{fmtC(profitPct, 1)}%
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* AYRAÇ */}
+      {orderSummaries.length > 0 && (
+        <div className="flex items-center gap-3">
+          <div className="flex-1 h-px bg-slate-100"></div>
+          <span className="text-[9px] font-black text-slate-300 uppercase tracking-widest">Artikel Bazlı Detay</span>
+          <div className="flex-1 h-px bg-slate-100"></div>
+        </div>
+      )}
 
       {/* ARAMA */}
       <div className="bg-white border border-slate-100 rounded-2xl p-3 shadow-sm relative">
@@ -140,21 +282,21 @@ export default function ProfitLoss() {
                 <div className="flex items-center gap-6 shrink-0 ml-4">
                   {totalRevenueUSD > 0 && (
                     <div className="text-right">
-                      <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Gelir (USD)</div>
-                      <div className="text-sm font-black text-blue-600">${fmtC(totalRevenueUSD)}</div>
+                      <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Gelir ({displayCurrency})</div>
+                      <div className="text-sm font-black text-blue-600">{displaySym}{displayFmt(convertFromUSD(totalRevenueUSD, r))}</div>
                     </div>
                   )}
                   {totalExpenseUSD > 0 && (
                     <div className="text-right">
-                      <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Gider (USD)</div>
-                      <div className="text-sm font-black text-slate-700">${fmtC(totalExpenseUSD)}</div>
+                      <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Gider ({displayCurrency})</div>
+                      <div className="text-sm font-black text-slate-700">{displaySym}{displayFmt(convertFromUSD(totalExpenseUSD, r))}</div>
                     </div>
                   )}
                   {(totalRevenueUSD > 0 || totalExpenseUSD > 0) && (
                     <div className={`text-right px-4 py-2 rounded-2xl border ${isProfit ? 'bg-emerald-50 border-emerald-100' : 'bg-red-50 border-red-100'}`}>
                       <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Kar/Zarar</div>
                       <div className={`text-sm font-black ${isProfit ? 'text-emerald-600' : 'text-red-600'}`}>
-                        {isProfit ? '+' : ''}${fmtC(profitUSD)}
+                        {isProfit ? '+' : '-'}{displaySym}{displayFmt(convertFromUSD(Math.abs(profitUSD), r))}
                       </div>
                       <div className={`text-[9px] font-black ${isProfit ? 'text-emerald-500' : 'text-red-500'}`}>
                         {profitPct >= 0 ? '+' : ''}{fmtC(profitPct, 1)}%
@@ -256,9 +398,9 @@ export default function ProfitLoss() {
                     <div className={`rounded-2xl p-5 border ${isProfit ? 'bg-emerald-50 border-emerald-100' : 'bg-red-50 border-red-100'}`}>
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
                         {[
-                          { label: 'Toplam Gelir (USD)', value: `$${fmtC(totalRevenueUSD)}`, color: 'text-blue-600' },
-                          { label: 'Toplam Gider (USD)', value: `$${fmtC(totalExpenseUSD)}`, color: 'text-slate-700' },
-                          { label: 'Net Kar/Zarar', value: `${isProfit ? '+' : ''}$${fmtC(profitUSD)}`, color: isProfit ? 'text-emerald-600' : 'text-red-600' },
+                              { label: `Toplam Gelir (${displayCurrency})`, value: `${displaySym}${displayFmt(convertFromUSD(totalRevenueUSD, r))}`, color: 'text-blue-600' },
+                          { label: `Toplam Gider (${displayCurrency})`, value: `${displaySym}${displayFmt(convertFromUSD(totalExpenseUSD, r))}`, color: 'text-slate-700' },
+                          { label: 'Net Kar/Zarar', value: `${isProfit ? '+' : '-'}${displaySym}${displayFmt(convertFromUSD(Math.abs(profitUSD), r))}`, color: isProfit ? 'text-emerald-600' : 'text-red-600' },
                           { label: 'Kar Marjı', value: `${profitPct >= 0 ? '+' : ''}${fmtC(profitPct, 1)}%`, color: isProfit ? 'text-emerald-600' : 'text-red-600' },
                         ].map(({ label, value, color }) => (
                           <div key={label}>
