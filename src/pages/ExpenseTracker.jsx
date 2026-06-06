@@ -239,19 +239,7 @@ export default function ExpenseTracker() {
             </select>
           </div>
 
-          {/* Seçilen siparişten gelen model/artikel — düzenlenebilir */}
-          {form.salesOrderId && (
-            <div className="grid grid-cols-2 gap-3 mt-3">
-              <div className="flex flex-col gap-1">
-                <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Model</label>
-                <input type="text" value={form.model} onChange={e => setField('model', e.target.value)} className={iCls}/>
-              </div>
-              <div className="flex flex-col gap-1">
-                <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Artikel</label>
-                <input type="text" value={form.article} onChange={e => setField('article', e.target.value)} className={iCls}/>
-              </div>
-            </div>
-          )}
+
         </div>
 
         {/* Fatura Bilgileri */}
@@ -315,18 +303,21 @@ export default function ExpenseTracker() {
                 </div>
                 <div className="col-span-3">
                   {/* ✅ Binlik ayraçlı TL input */}
-                  <div className="flex bg-white border border-slate-200 rounded-lg overflow-hidden h-9 focus-within:ring-2 focus-within:ring-amber-200">
-                    <input
-                      type="text"
-                      inputMode="decimal"
-                      value={amountDisplays[item.id] ?? fmtTRY(item.amount)}
-                      onChange={e => handleAmountChange(item.id, e.target.value)}
-                      onFocus={e => handleAmountFocus(item.id, e.target.value)}
-                      onBlur={e => handleAmountBlur(item.id, e.target.value)}
-                      placeholder="0,00"
-                      className="flex-1 px-3 bg-transparent outline-none text-sm font-black text-right"
-                    />
-                    <div className="px-2 flex items-center text-[10px] font-black text-amber-600 bg-amber-50 border-l border-slate-200">₺</div>
+                  <div className="flex flex-col gap-1">
+                    <div className="flex bg-white border border-slate-200 rounded-lg overflow-hidden h-9 focus-within:ring-2 focus-within:ring-amber-200">
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={amountDisplays[item.id] ?? fmtTRY(item.amount)}
+                        onChange={e => handleAmountChange(item.id, e.target.value)}
+                        onFocus={e => handleAmountFocus(item.id, e.target.value)}
+                        onBlur={e => handleAmountBlur(item.id, e.target.value)}
+                        placeholder="0,00"
+                        className="flex-1 px-3 bg-transparent outline-none text-sm font-black text-right"
+                      />
+                      <div className="px-2 flex items-center text-[10px] font-black text-amber-600 bg-amber-50 border-l border-slate-200">₺</div>
+                    </div>
+                    <span className="text-[8px] font-black text-slate-300 uppercase tracking-widest text-right">KDV Hariç</span>
                   </div>
                 </div>
                 <div className="col-span-1 text-right">
